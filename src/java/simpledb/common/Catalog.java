@@ -5,10 +5,7 @@ import simpledb.storage.DbFile;
 import simpledb.storage.HeapFile;
 import simpledb.storage.TupleDesc;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,12 +20,47 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Catalog {
 
+   public class Table implements Serializable {
+       private static final long serialVersionUID = 1L;
+
+       private final DbFile file;
+
+       private final String name;
+
+       private final String pkeyField;
+
+       public Table(DbFile file, String name, String pkeyField) {
+           this.file = file;
+           this.name = name;
+           this.pkeyField = pkeyField;
+       }
+
+       public DbFile getFile() {
+           return file;
+       }
+
+       public String getName() {
+           return name;
+       }
+
+       public String getPkeyField() {
+           return pkeyField;
+       }
+   }
+
+   //用来获取对应id的Table
+    private final ConcurrentHashMap<Integer, Table> map;
+
+   //用来存储表名和对应id的映射
+    private final ConcurrentHashMap<String, Integer> mapTableNameToId;
     /**
      * Constructor.
      * Creates a new, empty catalog.
      */
     public Catalog() {
         // some code goes here
+        map = new ConcurrentHashMap<>();
+        mapTableNameToId = new ConcurrentHashMap<>();
     }
 
     /**
@@ -42,6 +74,10 @@ public class Catalog {
      */
     public void addTable(DbFile file, String name, String pkeyField) {
         // some code goes here
+        Table table = new Table(file, name, pkeyField);
+        int id = table.getFile().getId();
+        map.put(id, table);
+        mapTableNameToId.put(name, id);
     }
 
     public void addTable(DbFile file, String name) {
@@ -65,7 +101,10 @@ public class Catalog {
      */
     public int getTableId(String name) throws NoSuchElementException {
         // some code goes here
-        return 0;
+        if(name != null && !name.isEmpty() && mapTableNameToId.containsKey(name)) {
+            return mapTableNameToId.get(name);
+        }
+        throw new NoSuchElementException("can't find the match table with name {" + name + "}");
     }
 
     /**
@@ -76,7 +115,10 @@ public class Catalog {
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
         // some code goes here
-        return null;
+        if(map.containsKey(tableid)) {
+            return map.get(tableid).getFile().getTupleDesc();
+        }
+        throw new NoSuchElementException("can't find the match table with tableId {" + tableid + "}");
     }
 
     /**
@@ -87,27 +129,38 @@ public class Catalog {
      */
     public DbFile getDatabaseFile(int tableid) throws NoSuchElementException {
         // some code goes here
-        return null;
+        if(map.containsKey(tableid)) {
+            return map.get(tableid).getFile();
+        }
+        throw new NoSuchElementException("can't find the match table with tableId {" + tableid + "}");
     }
 
     public String getPrimaryKey(int tableid) {
         // some code goes here
-        return null;
+        if(map.containsKey(tableid)) {
+            return map.get(tableid).getPkeyField();
+        }
+        throw new NoSuchElementException("can't find the match table with tableId {" + tableid + "}");
     }
 
     public Iterator<Integer> tableIdIterator() {
         // some code goes here
-        return null;
+        return map.keySet().iterator();
     }
 
     public String getTableName(int id) {
         // some code goes here
-        return null;
+        if(map.containsKey(id)) {
+            return map.get(id).getName();
+        }
+        throw new NoSuchElementException("can't find the match table with tableId {" + id + "}");
     }
     
     /** Delete all tables from the catalog */
     public void clear() {
         // some code goes here
+        map.clear();
+        mapTableNameToId.clear();
     }
     
     /**

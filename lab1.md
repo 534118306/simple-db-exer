@@ -382,7 +382,7 @@ file as you will need to access these objects.
 
 
 At this point, your code should pass the unit tests TupleTest and TupleDescTest. At this point, modifyRecordId() should
-fail because you havn't implemented it yet.
+fail because you haven't implemented it yet.
 
 ### 2.3. Catalog
 

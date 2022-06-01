@@ -1,7 +1,12 @@
 package simpledb.execution;
 
 import simpledb.common.Type;
+import simpledb.storage.Field;
+import simpledb.storage.StringField;
 import simpledb.storage.Tuple;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Knows how to compute some aggregate over a set of StringFields.
@@ -10,6 +15,15 @@ public class StringAggregator implements Aggregator {
 
     private static final long serialVersionUID = 1L;
 
+    private int gbfieldNum;
+
+    private Type gbfieldtype;
+
+    private int afieldNum;
+
+    private Op what;
+
+    private Map<Field, Integer> groupMap;
     /**
      * Aggregate constructor
      * @param gbfield the 0-based index of the group-by field in the tuple, or NO_GROUPING if there is no grouping
@@ -21,6 +35,12 @@ public class StringAggregator implements Aggregator {
 
     public StringAggregator(int gbfield, Type gbfieldtype, int afield, Op what) {
         // some code goes here
+        this.gbfieldNum = gbfield;
+        this.gbfieldtype = gbfieldtype;
+        this.afieldNum = afield;
+        this.what = what;
+
+        this.groupMap = new HashMap<>();
     }
 
     /**
@@ -29,6 +49,17 @@ public class StringAggregator implements Aggregator {
      */
     public void mergeTupleIntoGroup(Tuple tup) {
         // some code goes here
+        StringField afield = (StringField) tup.getField(afieldNum);
+        Field gbfield  = tup.getField(gbfieldNum);
+        String val = afield.getValue();
+        if(gbfield != null && gbfield.getType() != gbfieldtype) {
+            throw new IllegalArgumentException("Given tuple has wrong type");
+        }
+        if(!this.groupMap.containsKey(gbfield)) {
+            this.groupMap.put(gbfield, 1);
+        } else {
+            this.groupMap.put(gbfield, this.groupMap.get(gbfield) + 1);
+        }
     }
 
     /**
@@ -41,7 +72,12 @@ public class StringAggregator implements Aggregator {
      */
     public OpIterator iterator() {
         // some code goes here
-        throw new UnsupportedOperationException("please implement me for lab2");
+        return new StringAggIterator(this.groupMap, this.gbfieldtype);
     }
 
+    private class StringAggIterator extends AggregateIterator {
+        public StringAggIterator(Map<Field, Integer> groupMap, Type gbFieldType) {
+            super(groupMap, gbFieldType);
+        }
+    }
 }

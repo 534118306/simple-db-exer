@@ -9,6 +9,7 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -33,6 +34,12 @@ public class BufferPool {
     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
 
+    private final int numPages;
+
+    private final ConcurrentHashMap<PageId, Page> map;
+
+    private final LinkedHashMap<PageId, Page> cache;
+
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
@@ -40,6 +47,14 @@ public class BufferPool {
      */
     public BufferPool(int numPages) {
         // some code goes here
+        this.numPages = numPages;
+        this.map = new ConcurrentHashMap<>();
+        this.cache = new LinkedHashMap<PageId, Page>(numPages, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry eldest) {
+                return cache.size() > numPages;
+            }
+        };
     }
     
     public static int getPageSize() {
@@ -74,7 +89,12 @@ public class BufferPool {
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         // some code goes here
-        return null;
+        Page page = map.get(pid);
+        if(page == null) {
+            page = Database.getCatalog().getDatabaseFile(pid.getTableId()).readPage(pid);
+            addToBufferPool(pid, page);
+        }
+        return page;
     }
 
     /**
@@ -139,6 +159,10 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        List<Page> pages = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
+        for(Page page : pages) {
+            addToBufferPool(page.getId(), page);
+        }
     }
 
     /**
@@ -158,6 +182,8 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
+        dbFile.deleteTuple(tid, t);
     }
 
     /**
@@ -182,6 +208,11 @@ public class BufferPool {
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1
+        if(pid == null) return;
+        synchronized (cache) {
+            map.remove(pid);
+            cache.remove(pid);
+        }
     }
 
     /**
@@ -191,6 +222,17 @@ public class BufferPool {
     private synchronized  void flushPage(PageId pid) throws IOException {
         // some code goes here
         // not necessary for lab1
+        if(map.containsKey(pid)) {
+            Page page = map.get(pid);
+            TransactionId tid = page.isDirty();
+            if(tid != null) {
+                Database.getLogFile().logWrite(tid, page.getBeforeImage(), page);
+                Database.getLogFile().force();
+
+                page.markDirty(false, tid);
+                Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
+            }
+        }
     }
 
     /** Write all pages of the specified transaction to disk.
@@ -198,6 +240,12 @@ public class BufferPool {
     public synchronized  void flushPages(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        for(Page page : map.values()) {
+            if(tid.equals(page.isDirty())) {
+                flushPage(page.getId());
+                page.setBeforeImage();
+            }
+        }
     }
 
     /**
@@ -207,6 +255,41 @@ public class BufferPool {
     private synchronized  void evictPage() throws DbException {
         // some code goes here
         // not necessary for lab1
+        assert map.size() == numPages;
+        for(Page page : map.values()) {
+            // 留下脏页刷盘
+            if(page.isDirty() == null) {
+                map.remove(page.getId());
+                return;
+            }
+        }
+        //如果没有脏页，采用LRU
+        Iterator<Map.Entry<PageId, Page>> iterator = cache.entrySet().iterator();
+        while(iterator.hasNext()) {
+            Map.Entry<PageId, Page> first = iterator.next();
+            synchronized (cache) {
+                map.remove(first.getKey());
+                cache.remove(first.getKey());
+            }
+            return;
+        }
+        throw new DbException("No page to evict");
+    }
+
+    /**
+     * load page into a BufferPool, if BufferPool is full, evict a page
+     * @param pid
+     * @param page
+     * @throws DbException
+     */
+    private void addToBufferPool(PageId pid, Page page) throws DbException {
+        if(!map.containsKey(pid) && map.size() >= numPages) {
+            evictPage();
+        }
+        synchronized (cache) {
+            map.put(pid, page);
+            cache.put(pid, page);
+        }
     }
 
 }
