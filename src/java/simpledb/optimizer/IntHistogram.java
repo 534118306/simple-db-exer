@@ -6,6 +6,18 @@ import simpledb.execution.Predicate;
  */
 public class IntHistogram {
 
+    private final int bucketsNum;
+
+    private int[] buckets;
+
+    private int max;
+
+    private int min;
+
+    private double width;
+
+    private int tupleNum = 0;
+
     /**
      * Create a new IntHistogram.
      * 
@@ -24,6 +36,17 @@ public class IntHistogram {
      */
     public IntHistogram(int buckets, int min, int max) {
     	// some code goes here
+        this.bucketsNum = buckets;
+        this.min = min;
+        this.max = max;
+        this.buckets = new int[bucketsNum];
+        //比如value 在 [1, 6]， bucketNum = 2, 那么witdh = (1.0 + 6 - 1) / 2 = 3, 即[1, 3] [4, 6]
+        this.width = (1.0 + max - min) / bucketsNum;
+    }
+
+    public int getIndex(int v) {
+        if(v < this.min || v > this.max) throw new IllegalArgumentException("value {" + v + "} is illegal");
+        return (int)((v - this.min) / width);
     }
 
     /**
@@ -32,6 +55,9 @@ public class IntHistogram {
      */
     public void addValue(int v) {
     	// some code goes here
+        int index = getIndex(v);
+        this.buckets[index] ++;
+        tupleNum ++;
     }
 
     /**
@@ -45,9 +71,29 @@ public class IntHistogram {
      * @return Predicted selectivity of this particular operator and value
      */
     public double estimateSelectivity(Predicate.Op op, int v) {
-
+        if(op.equals(Predicate.Op.LESS_THAN)) {
+            if(v <= this.min) return 0.0;
+            if(v >= this.max) return 1.0;
+            double cnt = 0;
+            int index = getIndex(v);
+            for(int i = 0; i < index; i ++) {
+                cnt += buckets[i];
+            }
+            cnt += (v - min - index * this.width) * buckets[index] / this.width;
+            return cnt / this.tupleNum;
+        } else if(op.equals(Predicate.Op.LESS_THAN_OR_EQ)) {
+            return estimateSelectivity(Predicate.Op.LESS_THAN, v + 1);
+        } else if(op.equals(Predicate.Op.GREATER_THAN)) {
+            return 1 - estimateSelectivity(Predicate.Op.LESS_THAN_OR_EQ, v);
+        } else if(op.equals(Predicate.Op.GREATER_THAN_OR_EQ)) {
+            return 1 - estimateSelectivity(Predicate.Op.LESS_THAN, v);
+        } else if(op.equals(Predicate.Op.EQUALS)) {
+            return estimateSelectivity(Predicate.Op.LESS_THAN_OR_EQ, v) - estimateSelectivity(Predicate.Op.LESS_THAN, v);
+        } else if(op.equals(Predicate.Op.NOT_EQUALS)) {
+            return 1 - estimateSelectivity(Predicate.Op.EQUALS, v);
+        }
     	// some code goes here
-        return -1.0;
+        return 0.0;
     }
     
     /**
@@ -61,7 +107,7 @@ public class IntHistogram {
     public double avgSelectivity()
     {
         // some code goes here
-        return 1.0;
+        return (this.max - this.min) / (double)this.bucketsNum;
     }
     
     /**
@@ -69,6 +115,6 @@ public class IntHistogram {
      */
     public String toString() {
         // some code goes here
-        return null;
+        return String.format("IntHistogram(buckets=%d, min=%d, max=%d", this.bucketsNum, this.min, this.max);
     }
 }
