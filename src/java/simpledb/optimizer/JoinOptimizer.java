@@ -1,5 +1,6 @@
 package simpledb.optimizer;
 
+import com.sun.jmx.remote.internal.ArrayQueue;
 import simpledb.common.Database;
 import simpledb.ParsingException;
 import simpledb.execution.*;
@@ -130,7 +131,7 @@ public class JoinOptimizer {
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic
             // nested-loops join.
-            return -1.0;
+            return cost1 + card1 * cost2 + card1 * card2;
         }
     }
 
@@ -176,6 +177,33 @@ public class JoinOptimizer {
                                                    Map<String, Integer> tableAliasToId) {
         int card = 1;
         // some code goes here
+        switch (joinOp) {
+            case EQUALS:
+                if(t1pkey && !t2pkey) {
+                    card = card2;
+                } else if(!t1pkey && t2pkey) {
+                    card = card1;
+                } else if(t1pkey && t2pkey) {
+                    card = Math.min(card1, card2);
+                } else {
+                    card = Math.max(card1, card2);
+                }
+                break;
+            case NOT_EQUALS:
+                if(t1pkey && !t2pkey) {
+                    card = card1 * card2 - card2;
+                } else if(!t1pkey && t2pkey) {
+                    card = card1 * card2 - card1;
+                } else if(t1pkey && t2pkey) {
+                    card = card1 * card2 - Math.min(card1, card2);
+                } else {
+                    card = card1 * card2 - Math.max(card1, card2);
+                }
+                break;
+            default:
+                //其他记录按照范围查询来算
+                card = (int)(0.3 * card1 * card2);
+        }
         return card <= 0 ? 1 : card;
     }
 
@@ -190,25 +218,36 @@ public class JoinOptimizer {
      * @return a set of all subsets of the specified size
      */
     public <T> Set<Set<T>> enumerateSubsets(List<T> v, int size) {
-        Set<Set<T>> els = new HashSet<>();
-        els.add(new HashSet<>());
-        // Iterator<Set> it;
-        // long start = System.currentTimeMillis();
-
-        for (int i = 0; i < size; i++) {
-            Set<Set<T>> newels = new HashSet<>();
-            for (Set<T> s : els) {
-                for (T t : v) {
-                    Set<T> news = new HashSet<>(s);
-                    if (news.add(t))
-                        newels.add(news);
-                }
-            }
-            els = newels;
-        }
-
+          Set<Set<T>> els = new HashSet<>();
+//        els.add(new HashSet<>());
+//        // Iterator<Set> it;
+//        // long start = System.currentTimeMillis();
+//
+//        for (int i = 0; i < size; i++) {
+//            Set<Set<T>> newels = new HashSet<>();
+//            for (Set<T> s : els) {
+//                for (T t : v) {
+//                    Set<T> news = new HashSet<>(s);
+//                    if (news.add(t))
+//                        newels.add(news);
+//                }
+//            }
+//            els = newels;
+//        }
+        dfs(v, 0, size, els, new ArrayDeque<>());
         return els;
+    }
 
+    private <T> void dfs(List<T> v, int begin, int size, Set<Set<T>> res, Deque<T> path) {
+        if(path.size() == size) {
+            res.add(new HashSet<>(path));
+            return;
+        }
+        for(int i = begin; i < v.size(); i ++) {
+            path.addLast(v.get(i));
+            dfs(v, i + 1, size, res, path);
+            path.removeLast();
+        }
     }
 
     /**
@@ -238,7 +277,26 @@ public class JoinOptimizer {
 
         // some code goes here
         //Replace the following
-        return joins;
+        PlanCache planCache = new PlanCache();
+
+        for(int i = 1; i <= joins.size(); i ++) {
+            Set<Set<LogicalJoinNode>> subsets = enumerateSubsets(joins, i);
+            for(Set<LogicalJoinNode> set : subsets) {
+                CostCard bestCostCard = new CostCard();
+                bestCostCard.cost = Double.MAX_VALUE;
+                for(LogicalJoinNode node : set) {
+                    CostCard curCostCard = computeCostAndCardOfSubplan(stats, filterSelectivities, node, set, bestCostCard.cost, planCache);
+                    if(curCostCard != null && curCostCard.cost < bestCostCard.cost) {
+                        bestCostCard = curCostCard;
+                    }
+                }
+                planCache.addPlan(set, bestCostCard.cost, bestCostCard.card, bestCostCard.plan);
+            }
+            if(explain) {
+                printJoins(joins, planCache, stats, filterSelectivities);
+            }
+        }
+        return planCache.getOrder(new HashSet<>(joins));
     }
 
     // ===================== Private Methods =================================
