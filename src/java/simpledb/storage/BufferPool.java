@@ -4,6 +4,8 @@ import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
 import simpledb.common.DeadlockException;
+import simpledb.transaction.LockManager;
+import simpledb.transaction.PageLock;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
@@ -20,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * The BufferPool is also responsible for locking;  when a transaction fetches
  * a page, BufferPool checks that the transaction has the appropriate
  * locks to read/write the page.
- * 
+ *
  * @Threadsafe, all fields are final
  */
 public class BufferPool {
@@ -28,7 +30,7 @@ public class BufferPool {
     private static final int DEFAULT_PAGE_SIZE = 4096;
 
     private static int pageSize = DEFAULT_PAGE_SIZE;
-    
+
     /** Default number of pages passed to the constructor. This is used by
     other classes. BufferPool should use the numPages argument to the
     constructor instead. */
@@ -39,6 +41,8 @@ public class BufferPool {
     private final ConcurrentHashMap<PageId, Page> map;
 
     private final LinkedHashMap<PageId, Page> cache;
+
+    private final LockManager lockManager;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -55,17 +59,18 @@ public class BufferPool {
                 return cache.size() > numPages;
             }
         };
+        this.lockManager = new LockManager();
     }
-    
+
     public static int getPageSize() {
       return pageSize;
     }
-    
+
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void setPageSize(int pageSize) {
     	BufferPool.pageSize = pageSize;
     }
-    
+
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void resetPageSize() {
     	BufferPool.pageSize = DEFAULT_PAGE_SIZE;
@@ -94,6 +99,7 @@ public class BufferPool {
             page = Database.getCatalog().getDatabaseFile(pid.getTableId()).readPage(pid);
             addToBufferPool(pid, page);
         }
+        lockManager.acquire(tid, pid, perm);
         return page;
     }
 
@@ -109,6 +115,7 @@ public class BufferPool {
     public  void unsafeReleasePage(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
+        lockManager.release(tid, pid);
     }
 
     /**
@@ -119,13 +126,14 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid) {
         // some code goes here
         // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
     public boolean holdsLock(TransactionId tid, PageId p) {
         // some code goes here
         // not necessary for lab1|lab2
-        return false;
+        return lockManager.hold(tid, p);
     }
 
     /**
@@ -138,18 +146,38 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid, boolean commit) {
         // some code goes here
         // not necessary for lab1|lab2
+        if(commit) {
+            try {
+                flushPages(tid);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            for (Page page : map.values()) {
+                if(tid.equals(page.isDirty())) {
+                    discardPage(page.getId());
+                    page = Database.getCatalog().getDatabaseFile(page.getId().getTableId()).readPage(page.getId());
+                    try {
+                        addToBufferPool(page.getId(), page);
+                    } catch (DbException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+        lockManager.releaseAll(tid);
     }
 
     /**
      * Add a tuple to the specified table on behalf of transaction tid.  Will
-     * acquire a write lock on the page the tuple is added to and any other 
-     * pages that are updated (Lock acquisition is not needed for lab2). 
+     * acquire a write lock on the page the tuple is added to and any other
+     * pages that are updated (Lock acquisition is not needed for lab2).
      * May block if the lock(s) cannot be acquired.
-     * 
+     *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction adding the tuple
      * @param tableId the table to add the tuple to
@@ -171,9 +199,9 @@ public class BufferPool {
      * other pages that are updated. May block if the lock(s) cannot be acquired.
      *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction deleting the tuple.
      * @param t the tuple to delete
@@ -194,14 +222,18 @@ public class BufferPool {
     public synchronized void flushAllPages() throws IOException {
         // some code goes here
         // not necessary for lab1
-
+        for(Page page : map.values()) {
+            if(page.isDirty() != null) {
+                flushPage(page.getId());
+            }
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
         Needed by the recovery manager to ensure that the
         buffer pool doesn't keep a rolled back page in its
         cache.
-        
+
         Also used by B+ tree files to ensure that deleted pages
         are removed from the cache so they can be reused safely
     */
@@ -211,7 +243,7 @@ public class BufferPool {
         if(pid == null) return;
         synchronized (cache) {
             map.remove(pid);
-            cache.remove(pid);
+//            cache.remove(pid);
         }
     }
 
@@ -228,8 +260,7 @@ public class BufferPool {
             if(tid != null) {
                 Database.getLogFile().logWrite(tid, page.getBeforeImage(), page);
                 Database.getLogFile().force();
-
-                page.markDirty(false, tid);
+                page.markDirty(false, null);
                 Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
             }
         }
@@ -264,15 +295,16 @@ public class BufferPool {
             }
         }
         //如果没有脏页，采用LRU
-        Iterator<Map.Entry<PageId, Page>> iterator = cache.entrySet().iterator();
-        while(iterator.hasNext()) {
-            Map.Entry<PageId, Page> first = iterator.next();
-            synchronized (cache) {
-                map.remove(first.getKey());
-                cache.remove(first.getKey());
-            }
-            return;
-        }
+//        Iterator<Map.Entry<PageId, Page>> iterator = cache.entrySet().iterator();
+//        while(iterator.hasNext()) {
+//            Map.Entry<PageId, Page> first = iterator.next();
+//            synchronized (cache) {
+//                map.remove(first.getKey());
+//                cache.remove(first.getKey());
+//            }
+//            return;
+//        }
+        //如果没有脏页，抛出异常
         throw new DbException("No page to evict");
     }
 
@@ -286,10 +318,11 @@ public class BufferPool {
         if(!map.containsKey(pid) && map.size() >= numPages) {
             evictPage();
         }
-        synchronized (cache) {
-            map.put(pid, page);
-            cache.put(pid, page);
-        }
+//        synchronized (cache) {
+//            map.put(pid, page);
+//            cache.put(pid, page);
+//        }
+        map.put(pid, page);
     }
 
 }
