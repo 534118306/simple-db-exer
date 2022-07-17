@@ -5,7 +5,7 @@ import simpledb.common.Permissions;
 import simpledb.common.DbException;
 import simpledb.common.DeadlockException;
 import simpledb.transaction.LockManager;
-import simpledb.transaction.PageLock;
+//import simpledb.transaction.PageLock;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
@@ -260,9 +260,9 @@ public class BufferPool {
             if(tid != null) {
                 Database.getLogFile().logWrite(tid, page.getBeforeImage(), page);
                 Database.getLogFile().force();
-                page.markDirty(false, null);
-                Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
             }
+            page.markDirty(false, null);
+            Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
         }
     }
 
@@ -273,8 +273,8 @@ public class BufferPool {
         // not necessary for lab1|lab2
         for(Page page : map.values()) {
             if(tid.equals(page.isDirty())) {
-                flushPage(page.getId());
                 page.setBeforeImage();
+                flushPage(page.getId());
             }
         }
     }
